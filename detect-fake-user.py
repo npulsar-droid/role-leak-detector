@@ -136,19 +136,26 @@ def check(text):
 def find_truncated(path):
     """stop_reason が付いていない assistant メッセージを探す。
     最後の1件は「まだ確定していない」可能性があるので除外する（誤検知防止）。
-    推測を含まない唯一の軸：記録に『終わっていない』と書いてある。"""
+    推測を含まない唯一の軸：記録に『終わっていない』と書いてある。
+
+    ただし CLI（entrypoint: cli）は stop_reason を書かないことがあるため、
+    その場合はこの軸を使わない。デスクトップアプリでは 3,900 件中 1 件しか
+    欠けなかったのに対し、CLI では通常の応答でも欠ける。誤検出になる。"""
     rows = []
+    is_cli = False
     with open(path, encoding='utf-8', errors='replace') as f:
         for line in f:
             try: o = json.loads(line)
             except: continue
+            if o.get('entrypoint') == 'cli':
+                is_cli = True
             if o.get('type') != 'assistant': continue
             m = o.get('message', {}) or {}
             c = m.get('content')
             t = ''.join(b.get('text','') for b in c if isinstance(b, dict)) if isinstance(c, list) else ''
             if not t.strip(): continue
             rows.append((m.get('stop_reason'), t, o.get('timestamp','')))
-    if len(rows) < 2:
+    if is_cli or len(rows) < 2:
         return None
     sr, t, ts = rows[-2]                    # 直前の1件（確定済み）だけを見る
     if sr:
