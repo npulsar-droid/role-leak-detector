@@ -90,6 +90,27 @@ curl -o ~/.claude/hooks/detect-fake-user.py \
 python3 ~/.claude/hooks/detect-fake-user.py --test ~/.claude/projects/<project>/<session>.jsonl
 ```
 
+## 発生条件を自分のログで数える
+
+`leak_context_stats.py` は `~/.claude/projects/**/*.jsonl` を全部読んで、
+assistant メッセージ1件ごとに特徴量を出し、**どの条件で漏れやすいか**を表にします。
+
+```bash
+python3 leak_context_stats.py
+```
+
+文脈長・エージェント的ターンの深さ・直前のレコード種別・人間の発言からの経過秒数・
+セッション内の先行漏れ数・compact からの距離・モデル・日付などで、それぞれ検出率を出します。
+同時に `feat.csv`（1行＝1 assistant メッセージ）を作業ディレクトリに書きます。
+
+**`feat.csv` は自分のログの断片を含みます。** 各行に assistant 本文の冒頭 80 文字が入るので、
+そのまま共有しないでください（このリポジトリでは `.gitignore` 済み）。共有するなら
+`head` 列を落としてから。集計の表そのものには本文は入りません。
+
+[#44778 の追加報告](https://github.com/anthropics/claude-code/issues/44778)の数字は、
+このスクリプトを筆者のログに掛けた結果です。**1人分のデータでは条件の切り分けができない**ので、
+走らせた結果を issue に貼ってもらえると助かります。
+
 ## 自分の記憶にない発言を確認する
 
 ```bash

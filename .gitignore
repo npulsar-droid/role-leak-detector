@@ -2,3 +2,5 @@
 detections.log
 refs.log
 invocations.log
+feat.csv
+__pycache__/
