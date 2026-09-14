@@ -3,12 +3,14 @@
 Claude Code の返答に紛れ込む **偽の `user` ターン**（role-boundary leak）を、
 `Stop` フックで自動的に検出する 1 ファイルのスクリプト。依存ゼロ。
 
-> A `Stop` hook for Claude Code that detects fabricated `user` turns leaking into the
-> assistant's own output, plus three related artifact classes. Single file, no dependencies.
-> Related: [anthropics/claude-code#44778](https://github.com/anthropics/claude-code/issues/44778)
 **Install:** copy `detect-fake-user.py` to `~/.claude/hooks/` and register it as a `Stop` hook in `~/.claude/settings.json` (see 入れ方 below).
 **Output:** `~/.claude/hooks/detections.log`. It logs and beeps; it never alters the session.
 **Caveat:** heuristic. A nonexistent-path hit may just be a directory the assistant proposed but has not created yet.
+
+> A `Stop` hook for Claude Code that detects fabricated `user` turns leaking into the
+> assistant's own output, plus three related artifact classes. Single file, no dependencies.
+> Related: [anthropics/claude-code#44778](https://github.com/anthropics/claude-code/issues/44778)
+
 ---
 
 ## これは何を見つけるのか
