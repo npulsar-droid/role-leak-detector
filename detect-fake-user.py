@@ -138,9 +138,11 @@ def find_truncated(path):
     最後の1件は「まだ確定していない」可能性があるので除外する（誤検知防止）。
     推測を含まない唯一の軸：記録に『終わっていない』と書いてある。
 
-    ただし CLI（entrypoint: cli）は stop_reason を書かないことがあるため、
-    その場合はこの軸を使わない。デスクトップアプリでは 3,900 件中 1 件しか
-    欠けなかったのに対し、CLI では通常の応答でも欠ける。誤検出になる。"""
+    ただし CLI（entrypoint: cli）では、この hook が走る時点で直前の assistant
+    レコードにまだ stop_reason が書かれていないことがあるため、この軸を使わない。
+    保存後の jsonl を数えると CLI でも欠けは 0 件（記録の欠落ではなく、
+    hook 実行時点のタイミングの問題）。デスクトップアプリでは hook 時点でも
+    3,900 件中 1 件しか欠けなかった。"""
     rows = []
     is_cli = False
     with open(path, encoding='utf-8', errors='replace') as f:
