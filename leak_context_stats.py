@@ -2,7 +2,7 @@ import json,glob,os,re,csv,collections,datetime,sys
 root=os.path.expanduser('~/.claude/projects')
 PAT = re.compile(r'(?m)^[ \t]*(?:user(?![A-Za-z_.\-])[ \t]*\S|système)')
 LABEL_ONLY = {'思考', 'système', 'システム', 'thinking', 'Thinking', 'system'}
-PRIME = re.compile(r'捏造|fabricat|ラベル漏れ|role.?leak|偽の?ユーザ|偽user|fake.?user', re.I)
+PRIME = re.compile(r'捏造|fabricat|ラベル漏れ|label.?leak|role.?leak|偽の?ユーザ|偽user|fake.?user', re.I)
 ANYLABEL = re.compile(r'(?m)^[ \t]*user(?![A-Za-z_.\-])')
 def check(text):
     body = re.sub(r'```.*?```', '', text, flags=re.S)
