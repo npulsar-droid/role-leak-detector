@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""直近の assistant 返答に、捏造された user ターンが混ざっていないか検査する。
-Stop フックから呼ばれ、stdin に transcript_path を含む JSON を受け取る。
---test <file.jsonl> で過去ログに対して一括検査もできる。
+"""Check whether the latest assistant reply contains a fabricated user turn.
+Called as a Stop hook; reads JSON containing transcript_path from stdin.
+Use --test <file.jsonl> to scan a past log in one go.
 """
 import json, sys, re, os, datetime
 
@@ -13,68 +13,75 @@ def jst(ts):
     except Exception:
         return (ts or '')[:19]
 
-# user の直後は「空白＋何か」または「非ASCII（日本語）」。username 等は拾わない
-# 行頭一致で拾うのは、日本語の通常文に現れない語だけ。
-# 「システム」「思考」は日常語なので LABEL_ONLY（本文がその1語のみ）でしか判定しない。
-#   誤検知の実例: 「システムのデモ映像あります」
+# After "user" comes either "whitespace + something" or a non-ASCII char (Japanese).
+# Words like "username" are not matched.
+# Only words that never appear in ordinary Japanese text are matched at line start.
+# 「システム」 (system) and 「思考」 (thinking) are everyday words, so they are only
+# checked via LABEL_ONLY (the whole body is that single word).
+#   Real false positive: 「システムのデモ映像あります」 ("there's a demo video of the system")
 PAT = re.compile(r'(?m)^[ \t]*(?:user(?![A-Za-z_.\-])[ \t]*\S|système)')
-# 「système」は単独行でも漏れる（実測: 5件中5件が本文つきの user ラベルと同時だったが、
-#  単独で出れば現在の形でしか拾えない）。アクサン付きなので通常文には出ず、誤検知ゼロ。
+# "système" also leaks on a line of its own (observed: 5 of 5 cases appeared together
+#  with a user label that had body text, but if it shows up alone, only the current
+#  pattern can catch it). It carries an accent, so it never appears in ordinary text:
+#  zero false positives.
 #
-# 判定の指針（本人の観察・2026-08-21）:
-#   いずれかのラベルが漏れた時点で、**それ以降は全て捏造の疑いとして読む。**
-#   実測23件のうち20件が「ラベル以降すべて捏造」。ラベルの無い捏造も
-#   ラベル漏れの直後に現れる（08/13 13:20 の3要素目）。
-MIN_POS = 0.00          # 位置では絞らない。ラベル以降が末尾まで続く形で判定する
+# Reading guideline (author's observation, 2026-08-21):
+#   Once any label has leaked, **treat everything after it as suspected fabrication.**
+#   In 20 of 23 observed cases, everything after the label was fabricated. Fabrication
+#   without a label also appears right after a label leak (3rd element of 08/13 13:20).
+MIN_POS = 0.00          # No filtering by position. Judge by the label running to the end
 LABEL_ONLY = {'思考', 'système', 'システム', 'thinking', 'Thinking', 'system'}
 
-# ── 文字体系の混入 ──────────────────────────────────────────
-# 日本語・英数以外の文字体系。ギリシャ文字は数式で普通に使うので主要な字を除外する
+# ── Script mixing ────────────────────────────────────────────
+# Scripts other than Japanese and Latin/digits. Greek letters are common in math,
+# so the main letters are excluded
 GREEK_OK = set('αβγδεζηθικλμνξοπρστυφχψωΑΒΓΔΘΛΞΠΣΦΨΩ')
 SCRIPTS = [
-    ('キリル',     'Ѐ-ӿ'),
-    ('ギリシャ',   'Ͱ-Ͽ'),
-    ('ハングル',   'ᄀ-ᇿ㄰-㆏가-힯'),
-    ('タイ',       '฀-๿'),
-    ('アラビア',   '؀-ۿ'),
-    ('ヘブライ',   '֐-׿'),
-    ('デーヴァナーガリー', 'ऀ-ॿ'),
-    ('アルメニア', '԰-֏'),
-    ('ジョージア', 'Ⴀ-ჿ'),
+    ('Cyrillic',   'Ѐ-ӿ'),
+    ('Greek',      'Ͱ-Ͽ'),
+    ('Hangul',     'ᄀ-ᇿ㄰-㆏가-힯'),
+    ('Thai',       '฀-๿'),
+    ('Arabic',     '؀-ۿ'),
+    ('Hebrew',     '֐-׿'),
+    ('Devanagari', 'ऀ-ॿ'),
+    ('Armenian',   '԰-֏'),
+    ('Georgian',   'Ⴀ-ჿ'),
 ]
 SCRIPT_PAT = [(name, re.compile(f'[{rng}]')) for name, rng in SCRIPTS]
 
-# 簡体字は漢字と同じブロックにあるため文字体系では拾えない。日本語で使わない字を直接見る
+# Simplified Chinese shares the block with kanji, so it cannot be caught by script range.
+# Look directly for characters that Japanese does not use
 SIMPLIFIED = re.compile(
-    '[讠-谶钅-镳'   # 讠 / 钅 の簡体字群（说话语请谁课…）。谷(8c37)以降は日本語なので除外
+    '[讠-谶钅-镳'   # simplified 讠 / 钅 radicals (说话语请谁课…). 谷 (8c37) onward is Japanese, so excluded
     '这们东车马门问题现实经济发际关时应该个为从长图书电视网'
     '无业乐买卖儿么样过进开给种员亲爱产权势习华丽风飞鸟鱼龙齿]')
 
 def check_script(text):
     body = re.sub(r'```.*?```', '', text, flags=re.S)
-    body = re.sub(r'`[^`\n]*`', '', body)               # インラインコードも除外
+    body = re.sub(r'`[^`\n]*`', '', body)               # exclude inline code too
     for name, pat in SCRIPT_PAT:
         for m in pat.finditer(body):
             ch = m.group()
-            if name == 'ギリシャ' and ch in GREEK_OK:
+            if name == 'Greek' and ch in GREEK_OK:
                 continue
             s = max(0, m.start() - 12); e = min(len(body), m.end() + 12)
             return (name, ch, body[s:e].replace('\n', ' '))
     m = SIMPLIFIED.search(body)
     if m:
         s = max(0, m.start() - 12); e = min(len(body), m.end() + 12)
-        return ('簡体字', m.group(), body[s:e].replace('\n', ' '))
+        return ('Simplified Chinese', m.group(), body[s:e].replace('\n', ' '))
     return None
 
 
-# ── 参照物の実在確認 ────────────────────────────────────────
-# 言語を読まずに検証できるもの。ラベルの有無に関係なく効く
+# ── Do referenced things exist? ──────────────────────────────
+# Verifiable without reading the language. Works whether or not a label leaked
 PATHRE = re.compile(r'(?:/Users/[A-Za-z0-9._-]+|~)/[A-Za-z0-9._/\- ]{2,80}')
 URLRE  = re.compile(r'https?://[^\s)\]<>"\'）」、。]+')
 REFLOG = os.path.expanduser('~/.claude/hooks/refs.log')
 
 def _norm_path(p):
-    """末尾に語がくっついた形（`~/.claude 2.5GB`）を1語ずつ落として実在を探す"""
+    """For forms with trailing words attached (`~/.claude 2.5GB`), drop one word at a
+    time until an existing path is found"""
     p = p.strip().rstrip('.、。,')
     while p:
         if os.path.exists(os.path.expanduser(p)):
@@ -82,8 +89,8 @@ def _norm_path(p):
         if ' ' in p:
             p = p.rsplit(' ', 1)[0].rstrip('.、。,')
         else:
-            # 「Application」→「Application Support」のように、実在する名前の前半で
-            # 切れているだけなら見逃す
+            # If it is only cut off partway through a real name
+            # ("Application" -> "Application Support"), let it pass
             full = os.path.expanduser(p)
             parent, base = os.path.dirname(full), os.path.basename(full)
             try:
@@ -95,8 +102,9 @@ def _norm_path(p):
     return p, False
 
 def check_refs(text, log_urls=True):
-    """存在しないローカルパスを返す。URLは判定せず記録だけする（外部通信なし）"""
-    body = re.sub(r'```.*?```', '', text, flags=re.S)   # フェンスは例示が多いので除外
+    """Return local paths that do not exist. URLs are only recorded, not judged
+    (no network access)"""
+    body = re.sub(r'```.*?```', '', text, flags=re.S)   # fences are mostly examples, so excluded
     missing = []
     for raw in PATHRE.findall(body):
         p, exists = _norm_path(raw)
@@ -116,11 +124,11 @@ def check_refs(text, log_urls=True):
 
 
 def check(text):
-    body = re.sub(r'```.*?```', '', text, flags=re.S)   # コードフェンス内は除外
+    body = re.sub(r'```.*?```', '', text, flags=re.S)   # exclude code fences
     if not body.strip():
         return None
-    if body.strip() in LABEL_ONLY:                     # 本文がラベル1語だけ
-        return (0, len(body.strip()), f'[ラベルのみ] {body.strip()}', 1, 1)
+    if body.strip() in LABEL_ONLY:                     # body is a single label word
+        return (0, len(body.strip()), f'[label only] {body.strip()}', 1, 1)
     m = PAT.search(body)
     if not m:
         return None
@@ -134,15 +142,15 @@ def check(text):
     return (round(pos*100), len(tail), head, lines, paras)
 
 def find_truncated(path):
-    """stop_reason が付いていない assistant メッセージを探す。
-    最後の1件は「まだ確定していない」可能性があるので除外する（誤検知防止）。
-    推測を含まない唯一の軸：記録に『終わっていない』と書いてある。
+    """Find an assistant message that has no stop_reason.
+    The very last one may not be finalized yet, so it is excluded (avoids false positives).
+    The only axis with no guessing: the record itself says "not finished".
 
-    ただし CLI（entrypoint: cli）では、この hook が走る時点で直前の assistant
-    レコードにまだ stop_reason が書かれていないことがあるため、この軸を使わない。
-    保存後の jsonl を数えると CLI でも欠けは 0 件（記録の欠落ではなく、
-    hook 実行時点のタイミングの問題）。デスクトップアプリでは hook 時点でも
-    3,900 件中 1 件しか欠けなかった。"""
+    On the CLI (entrypoint: cli), however, the previous assistant record sometimes has
+    no stop_reason yet at the moment this hook runs, so this axis is not used there.
+    Counting the saved jsonl afterwards shows 0 missing on the CLI too (a matter of
+    timing at hook time, not a gap in the record). In the desktop app, only 1 of 3,900
+    was missing even at hook time."""
     rows = []
     is_cli = False
     with open(path, encoding='utf-8', errors='replace') as f:
@@ -159,7 +167,7 @@ def find_truncated(path):
             rows.append((m.get('stop_reason'), t, o.get('timestamp','')))
     if is_cli or len(rows) < 2:
         return None
-    sr, t, ts = rows[-2]                    # 直前の1件（確定済み）だけを見る
+    sr, t, ts = rows[-2]                    # look only at the previous (finalized) one
     if sr:
         return None
     return (jst(ts), len(t), t.strip()[-40:].replace('\n', ' '))
@@ -191,23 +199,23 @@ def main():
                         r = check(txt)
                         if r:
                             n += 1
-                            print(f"  {jst(o.get('timestamp',''))} [ラベル] {r[0]:3d}%地点 / {r[1]:4d}字 / {r[3]:2d}行 / {r[4]}段落  {r[2]}")
+                            print(f"  {jst(o.get('timestamp',''))} [label] at {r[0]:3d}% / {r[1]:4d} chars / {r[3]:2d} lines / {r[4]} paras  {r[2]}")
                         s = check_script(txt)
                         if s:
                             n += 1
-                            print(f"  {jst(o.get('timestamp',''))} [{s[0]}] 「{s[1]}」  …{s[2]}…")
+                            print(f"  {jst(o.get('timestamp',''))} [{s[0]}] \"{s[1]}\"  …{s[2]}…")
                         mp = check_refs(txt, log_urls=False)
                         if mp:
                             n += 1
-                            print(f"  {jst(o.get('timestamp',''))} [参照] 存在しないパス: {' / '.join(mp[:3])}")
-        print(f"検出 {n} 件")
+                            print(f"  {jst(o.get('timestamp',''))} [path] nonexistent path: {' / '.join(mp[:3])}")
+        print(f"{n} detection(s) (timestamps in JST)")
         return 0
     try:
         payload = json.load(sys.stdin)
     except Exception:
         return 0
     tp = payload.get('transcript_path')
-    # 呼び出されたこと自体を記録（動作確認用。うるさければ消してよい）
+    # Record that the hook was called at all (for checking it runs; delete if noisy)
     try:
         with open(os.path.expanduser('~/.claude/hooks/invocations.log'), 'a', encoding='utf-8') as f:
             f.write(datetime.datetime.now(JST).strftime('%Y-%m-%d %H:%M:%S')
@@ -216,8 +224,8 @@ def main():
         pass
     if not tp or not os.path.exists(tp):
         return 0
-    # Stop フックは、最後の返答が .jsonl に書かれる前に走ることがある（CLIで実測）。
-    # 少し待って読み直し、増えていれば新しいほうを使う
+    # The Stop hook can run before the last reply is written to the .jsonl (observed on CLI).
+    # Wait a moment and re-read; if the file grew, use the newer text
     t = last_assistant_text(tp)
     try:
         import time
@@ -234,28 +242,28 @@ def main():
     msgs = []
     r = check(t)
     if r:
-        msgs.append(f"ラベル漏れ（{r[0]}%地点／{r[1]}字／{r[3]}行／{r[4]}段落）: {r[2][:60]}")
+        msgs.append(f"label leak (at {r[0]}%, {r[1]} chars, {r[3]} lines, {r[4]} paras): {r[2][:60]}")
     s = check_script(t)
     if s:
-        msgs.append(f"{s[0]}が混入「{s[1]}」 …{s[2][:40]}…")
+        msgs.append(f"{s[0]} mixed in \"{s[1]}\" …{s[2][:40]}…")
     mp = check_refs(t)
     if mp:
-        msgs.append(f"存在しないパス → {' / '.join(mp[:3])}")
+        msgs.append(f"nonexistent path → {' / '.join(mp[:3])}")
     tr = find_truncated(tp)
     if tr:
-        msgs.append(f"前の返答が未完了（stop_reason 無し・{tr[1]}字）{tr[0]} 末尾: …{tr[2]}")
+        msgs.append(f"previous reply unfinished (no stop_reason, {tr[1]} chars) {tr[0]} JST, ends: …{tr[2]}")
 
     if msgs:
         stamp = datetime.datetime.now(JST).strftime('%Y-%m-%d %H:%M:%S')
-        # ① 消えない記録
+        # (1) Permanent record (timestamps in JST)
         try:
             with open(os.path.expanduser('~/.claude/hooks/detections.log'), 'a', encoding='utf-8') as f:
                 for m in msgs:
                     f.write(f'{stamp}\t{os.path.basename(tp)[:8]}\t{m}\n')
         except Exception:
             pass
-        # ② 音で知らせる（通知は許可が要るので使わない。音は不要）
-        #    無効化: 環境変数 CLAUDE_DETECT_SOUND=0
+        # (2) Alert with a sound (notifications need permission, so not used; sound does not)
+        #     Disable: environment variable CLAUDE_DETECT_SOUND=0
         if os.environ.get('CLAUDE_DETECT_SOUND', '1') != '0':
             try:
                 import subprocess, platform
@@ -265,15 +273,15 @@ def main():
                         subprocess.Popen(['afplay', snd],
                                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 else:
-                    sys.stderr.write('\a')      # 他OSは端末ベル
+                    sys.stderr.write('\a')      # terminal bell on other OSes
             except Exception:
                 pass
-        # ③ スキーマに載っている systemMessage で試す（表示されなくてもエラーにならない）
+        # (3) Try systemMessage, which is in the schema (no error even if it is not shown)
         try:
-            print(json.dumps({"systemMessage": "⚠ 検出: " + " / ".join(msgs)[:300]},
+            print(json.dumps({"systemMessage": "⚠ Detected: " + " / ".join(msgs)[:300]},
                              ensure_ascii=False))
         except Exception:
             pass
-    return 0          # 常に 0。停止をブロックしない（exit 2 はループの恐れ）
+    return 0          # Always 0. Never block the stop (exit 2 risks a loop)
 
 sys.exit(main())
