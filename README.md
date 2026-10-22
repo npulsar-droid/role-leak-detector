@@ -13,9 +13,8 @@ https://github.com/user-attachments/assets/b3e1eeb0-43f0-48ee-85bc-e067be7dedc3
 
 Related: [anthropics/claude-code#44778](https://github.com/anthropics/claude-code/issues/44778)
 
-> **The script reports in Japanese.** Log lines and the on-screen warning are written in
-> Japanese (for example `⚠ 検出`). The quoted text from your session is logged as-is, so the
-> log is still readable, but the labels around it are not translated yet. Timestamps are in JST.
+> **Timestamps are in JST.** Log lines and the on-screen warning are in English. Text quoted
+> from your session is logged as-is, in whatever language it was written.
 
 ---
 
